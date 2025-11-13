@@ -1,0 +1,497 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Aprender Sílabas — Avaliação</title>
+<script src="https://cdn.jsdelivr.net/npm/react@18/umd/react.production.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@babel/standalone/babel.min.js"></script>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  body { font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial; }
+  .correct-answer { animation: correctPulse .6s ease; }
+  @keyframes correctPulse { 0%{transform:scale(1)}50%{transform:scale(1.1)}100%{transform:scale(1)}}
+  .wrong-answer { animation: wrongShake .5s ease; }
+  @keyframes wrongShake { 0%,100%{transform:translateX(0)}25%{transform:translateX(-8px)}75%{transform:translateX(8px)}}
+</style>
+</head>
+<body class="bg-gray-50 p-6">
+<div id="root"></div>
+
+<script type="text/babel">
+/** Versão corrigida - todo o código está dentro deste script para evitar exibição como texto **/
+const { useState, useEffect, useRef } = React;
+
+/* ---------- Configurações e recursos ---------- */
+const AUDIO_PATHS = {
+  'a':'./a.mp3','e':'./e.mp3','i':'./i.mp3','o':'./o.mp3',
+  'u':'./u.mp3','ai':'./ai.mp3','au':'./au.mp3','ei':'./ei.mp3',
+  'eu':'./eu.mp3','iu':'./iu.mp3','oi':'./oi.mp3','ou':'./ou.mp3',
+  'ui':'./ui.mp3','ão':'./1ao.mp3','ãe':'./1ae.mp3','õe':'./1oe.mp3'
+};
+
+const BASE_QUESTIONS = [
+  { sound: 'a', correct: 'a', options: ['a','e','i','o'] },
+  { sound: 'e', correct: 'e', options: ['e','a','i','o'] },
+  { sound: 'i', correct: 'i', options: ['i','a','e','o'] },
+  { sound: 'o', correct: 'o', options: ['o','a','e','i'] },
+  { sound: 'ai', correct: 'ai', options: ['ai','au','ei','oi'] },
+  { sound: 'au', correct: 'au', options: ['au','ai','eu','ou'] },
+  { sound: 'ei', correct: 'ei', options: ['ei','ai','oi','eu'] },
+  { sound: 'eu', correct: 'eu', options: ['eu','au','ei','ou'] },
+  { sound: 'iu', correct: 'iu', options: ['iu','ui','au','eu'] },
+  { sound: 'oi', correct: 'oi', options: ['oi','ai','ei','ui'] },
+  { sound: 'ão', correct: 'ão', options: ['ão','am','an','om'] },
+  { sound: 'ãe', correct: 'ãe', options: ['ãe','ão','em','en'] },
+  { sound: 'õe', correct: 'õe', options: ['õe','ão','om','on'] }
+];
+
+function shuffle(arr){
+  const a = arr.slice();
+  for(let i=a.length-1;i>0;i--){
+    const j = Math.floor(Math.random()*(i+1));
+    [a[i],a[j]] = [a[j],a[i]];
+  }
+  return a;
+}
+
+const STORAGE_KEY = 'silabas_avaliacao_v1';
+function loadStore(){ try{ return JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}'); }catch(e){return{};} }
+function saveStore(data){ localStorage.setItem(STORAGE_KEY, JSON.stringify(data)); }
+
+function prepareQuestionsForSession(baseQuestions){
+  const q = baseQuestions.map(qi => {
+    const opts = shuffle(qi.options);
+    return {...qi, options: opts};
+  });
+  return shuffle(q);
+}
+
+/* ---------- Relatório: gerar HTML e descarregar .doc ---------- */
+function makeReportHTML(session, schoolName, logoDataUri){
+  const title = `Relatório — ${session.studentName || 'Aluno'}`;
+  const dateStr = new Date(session.date).toLocaleString();
+  const percentage = Math.round((session.score / session.total) * 100);
+  const style = `
+    <style>
+      body{font-family:Calibri, Arial, Helvetica, sans-serif; color:#111; margin:20px;}
+      .header{display:flex;align-items:center;justify-content:space-between;}
+      .school{font-size:14px;color:#444}
+      h1{color:#0b5cff;margin:6px 0 4px 0;font-size:22px}
+      .meta{font-size:13px;color:#333;margin-bottom:12px}
+      table{border-collapse:collapse;width:100%;margin-top:8px;font-size:13px}
+      th,td{border:1px solid #ddd;padding:8px;text-align:left}
+      th{background:#f4f6fb}
+      .ok{background:#e6f7ea}
+      .err{background:#fff0f0}
+      .summary{margin-top:12px;font-size:14px}
+    </style>`;
+
+  let rows = '';
+  session.answers.forEach((a,i) => {
+    const cls = a.isCorrect ? 'ok' : 'err';
+    const mark = a.isCorrect ? '✅' : '❌';
+    rows += `<tr class="${cls}">
+      <td style="text-align:center">${i+1}</td>
+      <td>${a.question}</td>
+      <td style="text-align:center">${a.correct}</td>
+      <td style="text-align:center">${a.selected}</td>
+      <td style="text-align:center">${a.timeSpent}s</td>
+      <td style="text-align:center">${mark}</td>
+    </tr>`;
+  });
+
+  const logoHTML = logoDataUri ? `<div style="width:140px"><img src="${logoDataUri}" style="max-width:140px;max-height:80px;object-fit:contain"/></div>` :
+    `<div style="width:140px"><div style="width:140px;height:70px;border:1px solid #ddd;display:flex;align-items:center;justify-content:center;color:#888">LOGO</div></div>`;
+
+  const school = schoolName && schoolName.trim() ? schoolName : 'Escola: __________________________';
+
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>${title}</title>${style}</head><body>
+    <div class="header">${logoHTML}<div style="flex:1;padding-left:14px">
+      <div class="school"><strong>${school}</strong></div>
+      <h1>${title}</h1>
+      <div class="meta"><strong>Data:</strong> ${dateStr} &nbsp;&nbsp; <strong>Pontuação:</strong> ${session.score}/${session.total} (${percentage}%) &nbsp;&nbsp; <strong>Duração:</strong> ${session.duration}s</div>
+    </div></div>
+    <table><thead><tr><th style="width:40px">#</th><th>Som</th><th style="width:80px">Correta</th><th style="width:80px">Resposta</th><th style="width:90px">Tempo</th><th style="width:90px">Resultado</th></tr></thead><tbody>
+    ${rows}</tbody></table>
+    <div class="summary">Notas: linhas verdes = corretas; linhas vermelhas = incorretas.</div>
+    </body></html>`;
+  return html;
+}
+
+function downloadWordFromHTML(htmlContent, filename){
+  const blob = new Blob([htmlContent], { type: 'application/msword' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+/* ---------- App ---------- */
+function App(){
+  const [view, setView] = useState('home'); // home | quiz | report | teacher | showSession
+  const [students, setStudents] = useState(() => loadStore().students || []);
+  const [selectedStudent, setSelectedStudent] = useState(null);
+  const [questions, setQuestions] = useState(()=> prepareQuestionsForSession(BASE_QUESTIONS));
+  const [currentIndex, setCurrentIndex] = useState(0);
+  const [selectedAnswer, setSelectedAnswer] = useState(null);
+  const [isCorrect, setIsCorrect] = useState(null);
+  const [answers, setAnswers] = useState([]);
+  const [score, setScore] = useState(0);
+  const [sessionStart, setSessionStart] = useState(null);
+  const [questionStart, setQuestionStart] = useState(null);
+  const audioRef = useRef(null);
+
+  const LOGO_DATA_URI = null; // se quiseres que eu embarque um logo, eu substituo por data-uri
+  const SCHOOL_NAME = ''; // pode ser preenchido mais tarde
+
+  useEffect(()=>{ const store = loadStore(); store.students = students; saveStore(store); },[students]);
+  useEffect(()=>{ if(view==='quiz' && audioRef.current) playSound(); },[currentIndex, view]);
+
+  const createStudent = (name, turma='')=>{
+    const id = Date.now().toString();
+    const newS = { id, name: name.trim(), turma: turma.trim(), history: [] };
+    setStudents(s => [...s, newS]);
+    setSelectedStudent(newS);
+    return newS;
+  };
+
+  const startSession = (student)=>{
+    setSelectedStudent(student);
+    const prepared = prepareQuestionsForSession(BASE_QUESTIONS);
+    setQuestions(prepared);
+    setCurrentIndex(0);
+    setSelectedAnswer(null);
+    setIsCorrect(null);
+    setAnswers([]);
+    setScore(0);
+    setSessionStart(Date.now());
+    setQuestionStart(Date.now());
+    setView('quiz');
+  };
+
+  function playSound(){
+    const q = questions[currentIndex];
+    const src = AUDIO_PATHS[q.sound] || '';
+    if(audioRef.current){
+      audioRef.current.src = src;
+      audioRef.current.currentTime = 0;
+      audioRef.current.play().catch(()=>{});
+    }
+  }
+
+  const handleAnswer = (option)=>{
+    if(selectedAnswer!==null) return;
+    const q = questions[currentIndex];
+    const correct = option === q.correct;
+    const timeSpent = Math.round((Date.now()-questionStart)/1000);
+    setSelectedAnswer(option);
+    setIsCorrect(correct);
+    setAnswers(prev => [...prev, {question:q.sound, correct:q.correct, selected:option, isCorrect:correct, timeSpent}]);
+    if(correct){
+      setScore(s=>s+1);
+      setTimeout(()=>{
+        if(currentIndex < questions.length-1){
+          setCurrentIndex(ci=>ci+1);
+          setSelectedAnswer(null);
+          setIsCorrect(null);
+          setQuestionStart(Date.now());
+        } else {
+          finishSession();
+        }
+      }, 1100);
+    } else {
+      setTimeout(()=>{
+        const shuffled = prepareQuestionsForSession(questions);
+        const idx = shuffled.findIndex(q2 => q2.sound === questions[currentIndex].sound);
+        if(idx !== -1){
+          const arr = shuffled.slice();
+          [arr[0], arr[idx]] = [arr[idx], arr[0]];
+          setQuestions(arr);
+          setCurrentIndex(0);
+        } else {
+          setQuestions(prepareQuestionsForSession(BASE_QUESTIONS));
+          setCurrentIndex(0);
+        }
+        setSelectedAnswer(null);
+        setIsCorrect(null);
+        setQuestionStart(Date.now());
+        setTimeout(()=>{ if(audioRef.current) playSound(); }, 120);
+      }, 900);
+    }
+  };
+
+  const finishSession = ()=>{
+    const duration = Math.round((Date.now()-sessionStart)/1000);
+    const session = { id: Date.now().toString(), date: new Date().toISOString(), studentId: selectedStudent.id, studentName: selectedStudent.name, score, total: questions.length, duration, answers };
+    setStudents(prev=> prev.map(s=> s.id===selectedStudent.id ? {...s, history:[...(s.history||[]), session]} : s));
+    const store = loadStore();
+    store.students = (students.map(s => s.id===selectedStudent.id ? {...selectedStudent, history:[...(selectedStudent.history||[]),session]} : s));
+    saveStore(store);
+    setView('report');
+    setSessionStart(null);
+  };
+
+  const exportCSV = (session) => {
+    const header = ['#','Som','Resposta Correta','Resposta Dada','Tempo(s)','Resultado'];
+    const rows = session.answers.map((a,i)=>[i+1,a.question,a.correct,a.selected,a.timeSpent,a.isCorrect ? 'OK' : 'ERRO']);
+    const all = [header, ...rows].map(r => r.map(c => '"'+String(c).replace(/"/g,'""')+'"').join(',')).join('\\n');
+    const blob = new Blob([all], {type:'text/csv'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${session.studentName || 'aluno'}_${session.date.split('T')[0]}.csv`;
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+  };
+
+  const downloadWord = (session) => {
+    const html = makeReportHTML(session, SCHOOL_NAME, LOGO_DATA_URI);
+    const safeName = (session.studentName || 'aluno').replace(/[^a-z0-9\-_]/ig,'_');
+    const filename = `${safeName}_${session.date.split('T')[0]}.doc`;
+    downloadWordFromHTML(html, filename);
+  };
+
+  const copyReportSummary = (session) => {
+    let txt = `Relatório - ${session.studentName}\\nData: ${new Date(session.date).toLocaleString()}\\nPontuação: ${session.score}/${session.total}\\nDuração: ${session.duration}s\\n\\n`;
+    session.answers.forEach((a,i)=>{ txt += `${i+1}. ${a.question} — correta: ${a.correct} — resposta: ${a.selected} — ${a.isCorrect ? 'OK' : 'ERRO'}\\n`; });
+    if(navigator.clipboard && navigator.clipboard.writeText){
+      navigator.clipboard.writeText(txt).then(()=>{ alert('Resumo copiado. Cola no Word (Ctrl+V/Cmd+V).'); }).catch(()=>{ alert('Não foi possível copiar automaticamente. Usa o botão Download Word.'); });
+    } else {
+      alert('Não foi possível copiar automaticamente. Usa o botão Download Word.');
+    }
+  };
+
+  /* ---------- Views ---------- */
+
+  if(view==='home'){
+    return (
+      <div className="max-w-4xl mx-auto">
+        <header className="flex items-center justify-between mb-6">
+          <h1 className="text-2xl font-bold">Aprender Sílabas — Avaliação</h1>
+          <div className="flex gap-2">
+            <button onClick={()=>setView('teacher')} className="px-3 py-2 bg-indigo-600 text-white rounded">Painel Professor</button>
+          </div>
+        </header>
+
+        <section className="bg-white p-4 rounded shadow mb-6">
+          <h2 className="font-semibold mb-2">Seleciona um aluno ou cria um novo</h2>
+          <div className="grid grid-cols-3 gap-4">
+            <div className="col-span-3">
+              <NewStudent onCreate={(name,turma)=>{ const s=createStudent(name,turma); startSession(s); }} />
+            </div>
+            {students.length===0 && (<div className="col-span-3 text-sm text-gray-500">Sem alunos. Cria um para começar.</div>)}
+            {students.map(s=>(
+              <div key={s.id} className="bg-gray-50 p-3 rounded border flex items-center justify-between">
+                <div>
+                  <div className="font-semibold">{s.name} {s.turma ? `· ${s.turma}` : ''}</div>
+                  <div className="text-sm text-gray-600">{(s.history||[]).length} sessões</div>
+                </div>
+                <div className="flex gap-2">
+                  <button className="px-3 py-2 bg-green-600 text-white rounded" onClick={()=>startSession(s)}>Começar</button>
+                  <button className="px-3 py-2 bg-gray-200 rounded" onClick={()=>{ setSelectedStudent(s); setView('report'); }}>Ver Relatórios</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <section className="bg-white p-4 rounded shadow">
+          <h3 className="font-semibold mb-2">Instruções rápidas</h3>
+          <ul className="list-disc pl-5 text-sm text-gray-700">
+            <li>Ao errar o exercício reinicia a mesma questão (após 1s) e a sequência baralha.</li>
+            <li>Pode terminar a sessão a qualquer altura com "Terminar Agora".</li>
+            <li>Exporta CSV de cada sessão para arquivar no sistema da escola.</li>
+          </ul>
+        </section>
+      </div>
+    );
+  }
+
+  if(view==='quiz'){
+    const q = questions[currentIndex];
+    const progress = Math.round(((currentIndex)/questions.length) * 100);
+    return (
+      <div className="max-w-3xl mx-auto">
+        <header className="flex items-center justify-between mb-4">
+          <div>
+            <h2 className="text-xl font-bold">Aluno: {selectedStudent.name} {selectedStudent.turma ? `· ${selectedStudent.turma}` : ''}</h2>
+            <div className="text-sm text-gray-600">Pontos: {score}/{questions.length}</div>
+          </div>
+          <div className="flex gap-2">
+            <button className="px-3 py-2 bg-yellow-500 rounded text-white" onClick={()=>{ finishSession(); }}>⏹️ Terminar Agora</button>
+            <button className="px-3 py-2 bg-gray-200 rounded" onClick={()=>{ setView('home'); }}>⤺ Voltar</button>
+          </div>
+        </header>
+
+        <div className="bg-white p-6 rounded shadow">
+          <div className="text-center mb-4">
+            <div className="text-6xl mb-2">🎧</div>
+            <div className="mb-3 text-lg font-semibold">Ouve com atenção</div>
+            <div className="flex justify-center gap-2">
+              <button onClick={()=>playSound()} className="px-4 py-2 bg-blue-600 text-white rounded">🔊 Ouvir Som</button>
+            </div>
+            <audio ref={audioRef} />
+          </div>
+
+          <div className="mb-4">
+            <div className="text-sm text-gray-600">Progresso: {currentIndex+1}/{questions.length}</div>
+            <div className="w-full bg-gray-200 h-2 rounded mt-2">
+              <div style={{width: `${progress}%`}} className="h-2 rounded bg-gradient-to-r from-blue-500 to-purple-500"></div>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            {q.options.map((opt,i)=> {
+              let cls = "bg-white border-4 border-gray-300 hover:border-blue-400 hover:bg-blue-50";
+              if(selectedAnswer === opt){
+                cls = isCorrect ? "bg-green-500 border-green-600 text-white correct-answer" : "bg-red-500 border-red-600 text-white wrong-answer";
+              }
+              return (
+                <button key={i} disabled={selectedAnswer!==null} onClick={()=>handleAnswer(opt)}
+                  className={`${cls} font-bold py-10 rounded-2xl text-3xl transition`}>
+                  {opt}
+                </button>
+              );
+            })}
+          </div>
+
+          {selectedAnswer!==null && (
+            <div className={`mt-4 p-4 rounded ${isCorrect ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
+              <div className="text-xl font-semibold">{isCorrect ? '✅ Correto!' : '❌ Ops! Vai tentar outra vez...'}</div>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  if(view==='report'){
+    const stu = students.find(s=>s.id===selectedStudent.id) || selectedStudent;
+    return (
+      <div className="max-w-4xl mx-auto">
+        <header className="flex items-center justify-between mb-4">
+          <h2 className="text-2xl font-bold">Relatório — {selectedStudent.name}</h2>
+          <div className="flex gap-2">
+            <button className="px-3 py-2 bg-indigo-600 text-white rounded" onClick={()=>setView('teacher')}>Painel Professor</button>
+            <button className="px-3 py-2 bg-gray-200 rounded" onClick={()=>setView('home')}>⤺ Início</button>
+          </div>
+        </header>
+
+        <div className="bg-white p-4 rounded shadow mb-4">
+          <h3 className="font-semibold mb-2">Sessões recentes</h3>
+          {(stu.history || []).slice().reverse().map((sess)=>(
+            <div key={sess.id} className="border-b py-3 flex justify-between items-center">
+              <div>
+                <div className="font-semibold">{new Date(sess.date).toLocaleString()} — {sess.score}/{sess.total}</div>
+                <div className="text-sm text-gray-600">Duração: {sess.duration}s — {sess.answers.length} respostas</div>
+              </div>
+              <div className="flex gap-2">
+                <button className="px-3 py-2 bg-green-600 text-white rounded" onClick={()=>exportCSV(sess)}>⬇️ CSV</button>
+                <button className="px-3 py-2 bg-purple-600 text-white rounded" onClick={()=>downloadWord(sess)}>⬇️ Download Word</button>
+                <button className="px-3 py-2 bg-blue-600 text-white rounded" onClick={()=>copyReportSummary(sess)}>📋 Copiar Resumo</button>
+                <button className="px-3 py-2 bg-gray-200 rounded" onClick={()=>{ setAnswers(sess.answers); setView('showSession'); }}>Ver</button>
+              </div>
+            </div>
+          ))}
+          {(stu.history || []).length===0 && (<div className="text-sm text-gray-600">Sem sessões para este aluno.</div>)}
+        </div>
+      </div>
+    );
+  }
+
+  if(view==='showSession'){
+    return (
+      <div className="max-w-3xl mx-auto">
+        <header className="flex items-center justify-between mb-4">
+          <h2 className="text-xl font-bold">Sessão — {selectedStudent.name}</h2>
+          <div className="flex gap-2">
+            <button className="px-3 py-2 bg-gray-200 rounded" onClick={()=>setView('report')}>⤺ Voltar</button>
+          </div>
+        </header>
+        <div className="bg-white p-4 rounded shadow">
+          <table className="w-full">
+            <thead className="bg-gray-100">
+              <tr><th className="p-2">#</th><th>Som</th><th>Correta</th><th>Resposta</th><th>Tempo(s)</th><th>Resultado</th></tr>
+            </thead>
+            <tbody>
+              {answers.map((a,i)=>(
+                <tr key={i} className="border-b">
+                  <td className="p-2">{i+1}</td>
+                  <td className="p-2 font-semibold">{a.question}</td>
+                  <td className="p-2 text-green-600">{a.correct}</td>
+                  <td className="p-2">{a.selected}</td>
+                  <td className="p-2">{a.timeSpent}s</td>
+                  <td className="p-2">{a.isCorrect ? '✅' : '❌'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    );
+  }
+
+  if(view==='teacher'){
+    return (
+      <div className="max-w-5xl mx-auto">
+        <header className="flex items-center justify-between mb-4">
+          <h2 className="text-2xl font-bold">Painel do Professor</h2>
+          <div className="flex gap-2">
+            <button className="px-3 py-2 bg-gray-200 rounded" onClick={()=>setView('home')}>⤺ Voltar</button>
+          </div>
+        </header>
+
+        <div className="bg-white p-4 rounded shadow">
+          <h3 className="font-semibold mb-2">Alunos</h3>
+          <div className="grid grid-cols-3 gap-4">
+            {students.map(s=>(
+              <div key={s.id} className="p-3 border rounded">
+                <div className="font-semibold">{s.name}</div>
+                <div className="text-sm text-gray-600">{(s.history||[]).length} sessões</div>
+                <div className="mt-2 flex gap-2">
+                  <button className="px-2 py-1 bg-blue-600 text-white rounded" onClick={()=>{ setSelectedStudent(s); setView('report'); }}>Relatórios</button>
+                  <button className="px-2 py-1 bg-gray-200 rounded" onClick={()=>{
+                    const allRows = (s.history||[]).flatMap(sess => sess.answers.map((a,i)=>[sess.date,sess.studentName,sess.score+'/'+sess.total,i+1,a.question,a.correct,a.selected,a.timeSpent,a.isCorrect? 'OK':'ERRO']));
+                    const header = ['Data','Aluno','SessãoScore','#','Som','RespostaCorreta','RespostaDada','Time(s)','Resultado'];
+                    const csv = [header, ...allRows].map(r=>r.map(c=>'"'+String(c).replace(/"/g,'""')+'"').join(',')).join('\\n');
+                    const blob = new Blob([csv], {type:'text/csv'});
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a'); a.href = url; a.download = `${s.name}_todas_sessoes.csv`; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+                  }}>⬇️ Exportar</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return null;
+}
+
+/* ---------- componente criar aluno ---------- */
+function NewStudent({ onCreate }){
+  const [name, setName] = useState('');
+  const [turma, setTurma] = useState('');
+  return (
+    <div className="p-3 border rounded">
+      <div className="mb-2 font-semibold">Novo Aluno</div>
+      <input placeholder="Nome" value={name} onChange={(e)=>setName(e.target.value)} className="w-full p-2 border rounded mb-2" />
+      <input placeholder="Turma (opcional)" value={turma} onChange={(e)=>setTurma(e.target.value)} className="w-full p-2 border rounded mb-2" />
+      <button disabled={!name.trim()} onClick={()=>{ onCreate(name,turma); setName(''); setTurma(''); }} className="w-full px-3 py-2 bg-green-600 text-white rounded disabled:opacity-50">Criar e Começar</button>
+    </div>
+  );
+}
+
+ReactDOM.render(<App />, document.getElementById('root'));
+</script>
+
+</body>
+</html>
